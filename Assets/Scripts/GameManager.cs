@@ -16,6 +16,7 @@ public class GameManager : MonoBehaviour
     public GameObject HeadingYField;
     public GameObject AccelerationField;
     public GameObject TurnRateField;
+    public GameObject MaxSpeedField;
 
     public GameObject ToggleGroup;
     public GameObject TargetPositionToggle;
@@ -35,6 +36,7 @@ public class GameManager : MonoBehaviour
     public float DesiredHeading { get; private set; }
     private float Acceleration;
     private float TurnRate;
+    private float MaxSpeed;
 
     public bool ValidInputs { get; private set; }
 
@@ -102,7 +104,8 @@ public class GameManager : MonoBehaviour
             || !float.TryParse(HeadingXField.GetComponent<InputField>().text, out headingX)
             || !float.TryParse(HeadingYField.GetComponent<InputField>().text, out headingY)
             || !float.TryParse(AccelerationField.GetComponent<InputField>().text, out Acceleration)
-            || !float.TryParse(TurnRateField.GetComponent<InputField>().text, out TurnRate))
+            || !float.TryParse(TurnRateField.GetComponent<InputField>().text, out TurnRate)
+            || !float.TryParse(MaxSpeedField.GetComponent<InputField>().text, out MaxSpeed))
         {
             return false;
         }
@@ -117,31 +120,49 @@ public class GameManager : MonoBehaviour
 
     private void RunAutopilot()
     {
+        float turnOutput = 0;
         bool thrustOutput = false;
         bool breakOutput = false;
-        float turnOutput = 0f;
 
-        Vector2 targetBearing = TargetPosition;
-        Vector2 parallelVelocity = targetBearing * Vector2.Dot(targetBearing, Velocity) / Mathf.Pow(targetBearing.magnitude, 2f);
-        Vector2 tangentVelocity = Velocity - parallelVelocity;
-        float headingAngle = Vector2.SignedAngle(targetBearing, Heading);
-        float tangentAngle = Vector2.SignedAngle(targetBearing, tangentVelocity);
+        Vector2 targetVector = TargetPosition - new Vector2(0, 0);
+        Vector2 perpendicularTargetVector = new Vector2(targetVector.y, -targetVector.x);
+        Vector2 parallelVelocity = targetVector * Vector2.Dot(targetVector, Velocity) / Mathf.Pow(targetVector.magnitude, 2f);
+        Vector2 perpendicularVelocity = Velocity - parallelVelocity;
+        Vector2 nextVelocity = Velocity + (Heading.normalized * Acceleration * Time.fixedDeltaTime);
+        Vector2 perpendicularNextVelocity = perpendicularTargetVector * Vector2.Dot(perpendicularTargetVector, Velocity) / Mathf.Pow(perpendicularTargetVector.magnitude, 2f);
+        float headingAngle = Vector2.SignedAngle(targetVector, Heading);
+        float perpendicularAngle = Vector2.SignedAngle(targetVector, perpendicularVelocity);
 
-        if (Vector2.Angle(targetBearing, Velocity) > 45f)
+        if (Vector2.Angle(targetVector, Velocity) > 45f)
         {
             breakOutput = true;
         }
-        if (headingAngle < 45f && Vector2.Dot(Heading, Velocity) < 0f)
+        if (Mathf.Abs(headingAngle) < 45f
+            && Vector2.Dot(Heading, Velocity) < 0f)
         {
             thrustOutput = true;
         }
-        if (headingAngle < 90f && Vector2.Dot(tangentVelocity, Heading) < 0f && tangentVelocity != Vector2.zero)
+        if (Mathf.Abs(headingAngle) < 90f
+            && Vector2.Dot(perpendicularVelocity, Heading) < 0f
+            && Vector2.Dot(perpendicularNextVelocity, perpendicularVelocity) >= 0f)
         {
             thrustOutput = true;
         }
 
+        if (Mathf.Abs(headingAngle) < 1f)
+        {
+            if (Velocity.magnitude < MaxSpeed)
+            {
+                thrustOutput = true;
+            }
+            else
+            {
+                thrustOutput = false;
+            }
+        }
+
         float turnRate = TurnRate * (2f * Mathf.PI / 360f);
-        float thrustDuration = tangentVelocity.magnitude / Acceleration;
+        float thrustDuration = perpendicularVelocity.magnitude / Acceleration;
         float desiredHeadingAngle;
         if (turnRate * thrustDuration > 1f)
         {
@@ -151,21 +172,28 @@ public class GameManager : MonoBehaviour
         {
             desiredHeadingAngle = (360f / (2f * Mathf.PI)) * Mathf.Acos(1 - turnRate * thrustDuration);
         }
-        //desiredHeadingAngle = Mathf.Clamp(desiredHeadingAngle, -90f, 90f);
-        if (tangentAngle > 0f)
+        if (perpendicularAngle > 0f)
         {
             desiredHeadingAngle *= -1;
         }
 
-        turnOutput = headingAngle - desiredHeadingAngle;
-        if (turnOutput < 0f)
+        if (Mathf.Abs(desiredHeadingAngle) < 15f)
         {
-            turnOutput = -1f;
+            desiredHeadingAngle = 0f;
         }
-        else if (turnOutput > 0f)
+
+        turnOutput = desiredHeadingAngle - headingAngle;
+        if (turnOutput < -180f)
         {
-            turnOutput = 1f;
+            turnOutput += 360f;
         }
+        else if (turnOutput > 180f)
+        {
+            turnOutput -= 360f;
+        }
+
+        turnOutput = Mathf.Clamp(turnOutput, -TurnRate * Time.fixedDeltaTime, TurnRate * Time.fixedDeltaTime);
+        turnOutput /= TurnRate * Time.fixedDeltaTime;
 
         DesiredHeading = desiredHeadingAngle;
         DesiredHeadingOutputText.GetComponent<Text>().text = "(DesiredHeading = "+ DesiredHeading.ToString()+")";
